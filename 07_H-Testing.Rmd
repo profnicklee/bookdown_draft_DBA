@@ -1,0 +1,407 @@
+---
+title: 'WBS MRes: Learning with Data 2023: Hypothesis Testing'
+output:
+  html_document:
+    keep_md: true
+date: "2023-11-30"
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+```{r all packages needed, include=FALSE}
+#baseline setup
+# install.packages("readxl")
+# install.packages("ggplot2")
+# install.packages("tidyverse")
+
+#H-testing setup
+#note: some of these aren't used for the code that I run, but for other parts I have hashed out.
+#install.packages("combinat")
+#install.packages("gtools")
+#install.packages("ggpubr")
+#install.packages("mosaic")
+#install.packages("dplyr")
+#install.packages("gganimate")
+#install.packages("gifski")
+#install.packages("png")
+#install.packages("installr")
+#install.packages("skimr")
+#install.pcakages("rstatix")
+#install.packages("pwr")
+
+```
+
+
+# Statistical Hypothesis Testing - The Classical Approach
+
+This lesson contains some (re)worked examples from earlier sessions, focusing specifically on the hypothesis testing aspect of them. 
+
+If you want to run the R code itself, in your own time later perhaps, you will need to download the R Package archive for this set of notes, which can be downloaded from my OSF Repository:
+
+https://osf.io/z4mw5/
+
+Go to the 'Hypothesis Testing' folder, and download the R Package archive,
+
+You need to Unzip the archive into a directory, and then load the package file into R. If so, the code points to all the data files as relative files, so as long as the data is in the same directory as this code, it should all work.
+
+
+```{r load up all packages, include=FALSE}
+#note: some of these aren't used for the code that I run, but for other parts I have hashed out.
+library(tidyverse)
+library(combinat)
+library(gtools)
+library(readxl)
+library(ggplot2)
+library(ggpubr)
+library(mosaic)
+
+library(dplyr)
+library(gganimate)
+library(gifski)
+library(png)
+library(installr)
+library(skimr)
+library(rstatix)
+library(pwr)
+```
+
+## Premier League Goals and the Poisson Distribution
+
+In this section, we are not really worried about the *actual* goals or anything like that. What we are concerned about is formally testing the hypothesis that Premier League goals per game actually do follow a Poisson distribution. To do this, we will use what is called a **chi-square** test, which uses the chi-square statistic.
+
+Chi-square is a fantastically versatile statistic, which is often used to compare tables of observations. Commonly, we compare a table of observed events with a table of events that we would expect if the null hypothesis were true in the population. The chi-square value is the measure of the difference between observed and expected counts in the table. We can use it here to compare the amount of goals we actually did observe in the 21-22 season, with those that we would *expect* to observe if the goals per game really do follow a Poisson distribution.
+
+Again, much of the idea and code for this section comes from: <https://bookdown.org/theqdata/honors_thesis/goal-scoring-and-the-poisson-process.html>
+
+The data comes from: <https://www.football-data.co.uk/englandm.php> and is the EPL results for 21-22 Season, with a new column of Total Goals (TOTG) created by me in Excel.
+
+```{r}
+EPL<-read_excel("Data/EPL21-22.xlsx")
+head(EPL)
+```
+
+```{r}
+summary(EPL$HomeTeam)
+```
+
+The above is a quick way of calculating / checking the total number of games if you don't know already.
+
+```{r}
+summary(EPL$TOTG)
+```
+
+```{r}
+sum(EPL$TOTG)
+```
+
+First, let's create a table of all the matches with different numbers of goals, just as we did in Lesson 6.
+
+```{r}
+GoalsTable <- 
+  EPL %>% 
+  group_by(TOTG) %>% 
+  summarise(ActualMatches = n())
+GoalsTable 
+```
+
+Here, we have a problem. The chi-square test has a condition that the expected values in every column will be greater than 5, and as we go down the Poisson probabilities (i.e. for higher total goals), it is clear that this will start to become a problem for us.
+
+The solution is simple, we combine the numbers for larger numbers of goals into a single 'x and above' variable. Here, let's do it for 6 goals and above.
+
+To do so, we first need to create a new table, where the values for 6 and above are combined into a new row.
+
+```{r}
+# select first 5 rows (0, 1, 2, 3, 4, 5 goals)
+NewGoalsTable <- GoalsTable[1:6,]
+# sum up the remaining rows
+NewGoalsTable[7,] <- sum(GoalsTable[7:nrow(GoalsTable),2])
+NewGoalsTable <- mutate(NewGoalsTable, TOTG = as.character(TOTG))
+# put in 1 category called "5 or more"
+NewGoalsTable[7,"TOTG"] <- "6 or more" 
+NewGoalsTable
+```
+
+Now we can create the Poisson distribution for the relevant mean, which means we first need to create the stats...
+
+```{r}
+fav_stats(EPL$TOTG)
+```
+
+Below is some code which will help us to create the distributions and also check them.
+
+```{r}
+MeanGoals <- fav_stats(EPL$TOTG)[[6]]
+numMatches <- fav_stats(EPL$TOTG)[[8]]
+StDevGoals <- fav_stats(EPL$TOTG)[[7]]
+VarianceGoals <- StDevGoals ^ 2
+```
+
+```{r}
+MeanGoals
+```
+
+```{r}
+VarianceGoals
+```
+
+As we saw in Lesson 7, while for a Poisson distribution these should be exactly the same, we decided that they were good enough to be going on with.
+
+So, let's actually check this formally with the Chi-square test.
+
+We do so by first creating a table of the Poisson probabilities for x or fewer goals, for the Poisson with a mean of 2.818 (i.e. the variable MeanGoals)
+
+```{r}
+PoisProb <- dpois(c(0:6), MeanGoals)
+POIS <-data.frame(PoisProb)
+POIS
+```
+
+This allows us to make some predictions of what we could expect.
+
+Remembering again that there are 380 games in a season, we can see that there is a 0.16% chance of seeing 4 goals in a game, which equates to 380 x 0.16 = 60.8 games we would expect to see in a season with 4 goals.
+
+We can check this out by creating a new table comparing actual with predicted values...
+
+```{r}
+NewGoalsTable <- cbind(NewGoalsTable, PoisProb) 
+NewGoalsTable <- mutate(NewGoalsTable, 
+                        ExpectedMatches = round(numMatches * PoisProb))
+NewGoalsTable
+```
+
+This looks quite frighteningly close up until you get to the 5 row. It will be interesting to see how we go with a formal chi-square test.
+
+```{r}
+TOTGChisq <- chisq.test(NewGoalsTable$ActualMatches, 
+                      p = NewGoalsTable$PoisProb, rescale.p = TRUE)
+TOTGChisq
+```
+
+The P-value here is actually 0.64. This suggests that there is not a significant difference between the distribution of the actual goals, and that which would be expected if they did follow a Poisson distribution.
+
+## Correlation Significance Tests
+
+Here, we revisit our correlation between GDP per capita, and Happiness metrics, which I pulled from Our Word in Data:
+
+```{r}
+Happy<-read_excel("Data/HappyGDP.xlsx", sheet = "2020")
+
+summary(Happy)
+head(Happy)
+```
+
+Let's not worry about plotting the data, and go straight to the correlation:
+
+```{r}
+Assoc1 <- cor.test(Happy$Happiness, Happy$GDPpc, 
+                    method = "pearson")
+
+Assoc1
+
+```
+
+Here are our results. The estimate is a correlation, and we test that using the t statistic. The t-value is simply the estimate divided by the standard error (which we can't see in this output), and is interpreted essentially as 'how far from 0 is the estimate, in standard errors'.
+
+The p-value for t is very very small, and obviously less than 0.05.
+
+## Regression Significance Tests
+
+The process to asses the significance of regression estimates is very very similar to that for correlations. Let's revisit the heart disease data from: <https://www.scribbr.com/statistics/linear-regression-in-r/>
+
+```{r}
+Heart<-read_excel("Data/heart.data.xlsx")
+
+summary(Heart)
+head(Heart)
+```
+
+Let's go straight the the multiple regression model.
+
+```{r}
+heart.disease.lm<-lm(heart.disease ~ biking + smoking, data = Heart)
+
+summary(heart.disease.lm)
+```
+
+We interpret these just as we did the correlation significance tests.
+
+The t-value is large, and the p-value (two-tailed) is small.
+
+Interestingly, R gives 'stars' for the different levels of significance, so to some extent they are doing some decision making for you.
+
+## ANOVA
+
+Here, I'll demonstrate the basic application of ANOVA on the simple 3-group case of the Ed Sheeran Study:
+
+```{r}
+ED<-read_excel("Data/SHEERAN_ANOVA.xlsx", sheet = "ANOVA")
+head(ED)
+```
+
+We need to tell R that GROUP is a factor variable not a numeric one:
+
+```{r}
+ED$GROUP <- factor(ED$GROUP)
+```
+
+Check it worked:
+
+```{r}
+skim(ED)
+```
+
+Let's create a quick table of the group means
+
+```{r}
+ED %>%
+  group_by(GROUP) %>%
+  get_summary_stats(ANGER, type = "mean_sd")
+```
+
+And now visualize that in a boxplot:
+
+```{r}
+ggboxplot(ED, x = "GROUP", y = "ANGER")
+```
+
+Hmmm....
+
+Let's run an ANOVA (we're using the rstatix package here not Base R)
+
+Much of the following is drawn from: <https://www.datanovia.com/en/lessons/anova-in-r/>
+
+```{r}
+res.aov <- ED %>% anova_test(ANGER ~ GROUP)
+res.aov
+```
+
+Results here suggest there is a significant effect (p-value is very small) rstatix also gives us an 'effect size' measure (ges, generalized eta-squared) which is also useful to us and suggests the effect is quite large. This can be interpreted similarly to a regression coefficient (which is also an effect size measure), and is the amount of variance in the dependent variable (Anger) that is explained by group membership.
+
+However, ANOVA only tests the 'general effect' of the treatment / group. We don't know whether this is because of the difference between all of the groups, or only some. E.g., is it that there is an effect of music in general (i.e. between Control and Ed, and Control and Music, but not between Ed and Music), or that Ed specifically is anger-inducing (in whcih case we would see an effect between Ed and Music, and Ed and Control, and not between Music and Control).
+
+We can investigate this using Post-Hoc tests, which compare the individual groups. This has the potential for a multiple comparisons problem, which we will need to deal with.
+
+Let's take a look back to the slide deck...
+
+```{r}
+pwc <- ED %>% tukey_hsd(ANGER ~ GROUP)
+pwc
+```
+
+We can actually plot these results in a really effective way:
+
+```{r}
+# Visualization: box plots with p-values
+pwc <- pwc %>% add_xy_position(x = "GROUP")
+ggboxplot(ED, x = "GROUP", y = "ANGER") +
+  stat_pvalue_manual(pwc, hide.ns = TRUE) +
+  labs(
+    subtitle = get_test_label(res.aov, detailed = TRUE),
+    caption = get_pwc_label(pwc)
+    )
+```
+
+This very clearly tells us that it is the Ed Sheeran group (2)that is driving these results, and there isn't much to choose between the control group, and the 'music' group.
+
+Now, there are many other things that if we were doing ANOVA that we would also look to deal with - such as the various assumptions required of ANOVA, and so forth. But, they are beyond our scope in this class. Suffice to say that this has only scratched the surface of ANOVA so far.
+
+## Rate of Change in Football Goals per Season - Bonferroni Correction?
+
+Here, I'm using data from <https://www.footballhistory.org/league/premier-league-statistics.html>
+
+I hand-entered this into a spreadsheet, and calculated the additional stuff.
+
+```{r}
+EPLGOALS<-read_excel("Data/EPLGOALS.xlsx")
+head(EPLGOALS)
+```
+
+You can see here I have calculated the standard errors from the yearly goal totals (which represent that year's underlying rate of goal occurrence), then used that to calculate the 95% Confidence Interval limits
+
+We can use these to create a nifty chart with the error bars...drawing from the code used by Spiegelhalter in his book for Figure 9.4 available on his github (linked in the code).
+
+```{r}
+#modified from Spiegelhalter's Figure 9.4 available at:
+#https://github.com/dspiegel29/ArtofStatistics/blob/master/09-4-homicide-rates-E%2BW/09-4-homicide-trends-x.Rmd
+
+#note, the hashed-out code is not relevant to my example
+#but left in in case someone else wants to use it
+
+df<-EPLGOALS # read data to dataframe df
+p <- ggplot(df, aes(x=Season, y=Goals)) # initial plot
+p <- p + geom_bar(stat="identity", fill="red") # assign bar chart type
+
+#yearLabels <- c("Apr  97-\nMar  98","Apr  00-\nMar  01","Apr  03-\nMar  #04","Apr  06-\nMar  07","Apr 09-\nMar  10","Apr  12-\nMar  13","Apr  #15-\nMar  16") # assign labels for x-axis
+
+p <- p + geom_errorbar(aes(ymin=Lower95CI, ymax=Upper95CI), width=.1) # 95% intervals
+
+#p <- p + scale_x_continuous(breaks=seq(1997, 2015, 3), labels =yearLabels) # attach labels and their break points
+
+p <- p + scale_y_continuous(breaks=seq(0, 1100, 100)) # define break points for y-axis
+p <- p + labs(y="Total Goals") # add y-axis label and caption
+p
+
+```
+
+From this chart, and looking at the data itself, we can see that the 95% Intervals overlap, so it is hard to conclude that the underlying rate of goals has changed significantly year on year. Yes, even in the pandemic.
+
+Remember though, the ONS suggest that it is over-stringent to rely on error bar overlap, so we can also use z-tests to directly test the assumption that the change is zero.
+
+See: <https://www.ons.gov.uk/peoplepopulationandcommunity/crimeandjustice/compendium/focusonviolentcrimeandsexualoffences/yearendingmarch2016/homicide#statistical-interpretation-of-trends-in-homicides>
+
+Rather than just use a z-value cutoff of 1.96 as we did last time, in the next data file, I have calculated the p-value (2 tailed as we do not hypothesize a direction for the difference) for the z-scores for the difference between each season, year-on-year.
+
+```{r}
+EPLP<-read_excel("Data/EPLGOALSP.xlsx")
+head(EPLP)
+```
+
+Here, we can plot the p-values (2-tailed), and again we see (just like with the z-tests) that the same two seasons have significant differences.
+
+```{r}
+#visualize the z values simply with control lines
+U <- 0.05
+#L <- -1.96
+p <- ggplot(EPLP, aes(x=Season, y=p2)) + geom_point() 
+p <- p+ geom_hline(aes(yintercept=U))
+#p <- p+ geom_hline(aes(yintercept=L))
+p
+
+```
+
+We can see that the 1999-2000 season, and the 2009-10 seasons have p values less than 0.05
+
+The question is are we suffering from the multiple comparisons problem? Should we correct for it? It's hard to say actually. Of course, we are indeed running multiple tests, 29 in fact. So, the chance of a false positive is quite high, if the null was true in all cases. The Bonferroni correction would immediately reduce this, but at the cost of making none of our tests significant.
+
+Further, the basis of these corrections is that the null hypothesis is true. What if it is the alternative hypothesis (that is, the H of an effect existing) that is true? In such cases, there can of course be no false positives. Here, you are increasing the chances of a false negative by reducing the chances of a false positive. So, what are the potential costs of each of these mistakes?
+
+For example, Thomas Perneger's 1998 paper in the BMJ is scathing about the Bonferroni adjustment. Take a look at <https://www.bmj.com/content/316/7139/1236.full>
+
+Mind you, I am not saying that's the final word, just that there are multiple perspectives on the issues!
+
+It's never as simple as it seems when making statistical decisions, is it?
+
+## Statistical Power
+
+Different types of analysis and research design require different types of power calculation. In R, we can use the pwr package to calculate quite a few.
+
+Let's calculate the required sample size for the Ed Sheeran study we conducted earlier. Really, we should have done this before collecting data, but it's a nice example to do it post hoc.
+
+We don't need the data, just the parameters of the experiment and analysis design.
+
+So, we had 3 groups, and used ANOVA
+
+Let's set a significance of 0.05, a required power of 0.8, and assume the effect size is moderate (say 0.25)
+
+```{r}
+pwr.anova.test(k=3,f=.25,sig.level=.05,power=.8)
+```
+
+So, we really wanted to have around 50 in each group to have an 80% chance of detecting a moderate effect presuming the null was true.
+
+You can see that my study (with only 15 in each group) was rather underpowered. However, if I had increased the effect size in the calculation to 0.5 (close to what the experiment suggested) this would have given me a result for n closer to what I actually used. However, you'd have to be VERY confident in the size of your likely effect to actually do that I think.
